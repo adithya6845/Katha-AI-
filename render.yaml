@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: katha-ai
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: NODE_PORT
+        value: 3000
+      - key: TEST_MODE
+        value: "true"
+      - key: DEFAULT_CUSTOMER_PHONE
+        value: "+916363077110"
+      - key: DEFAULT_SUPPLIER_PHONE
+        value: "+916363077110"
+      - key: VOICE_API_KEY
+        sync: false
+      - key: AGENT_ID_ADVISOR
+        sync: false
+      - key: AGENT_ID_PAYMENT
+        sync: false
+      - key: COLLECTIONS_AGENT_ID
+        sync: false
+      - key: AGENT_ID_SUPPLIER
+        sync: false
+      - key: AGENT_ID_LEDGER
+        sync: false
+      - key: LEDGER_AGENT_ID
+        sync: false
+      - key: LEDGER_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: GNANI_API_KEY
+        sync: false

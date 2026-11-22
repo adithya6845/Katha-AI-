@@ -1,0 +1,47 @@
+# Environment & Secret Credentials
+.env
+.env.*
+*.env
+bolna_agent_config.json
+data/backups/
+
+# Excel temporary / lock files
+~$*.xlsx
+~$*.xls
+
+# Node dependencies
+node_modules/
+npm-debug.log*
+
+# Python bytecode and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.gemini/
+
+# Temporary / Scratch scripts and logs
+patch_*.py
+fix*.py
+python.py
+inspect_db.py
+find_bolna.py
+scan_app_bolna.py
+scan_api_bolna.py
+test_excel_com.ps1
+*_backup.*
+*.log
+tunnel.log
+
+# Frontend build artifacts if any
+frontend/

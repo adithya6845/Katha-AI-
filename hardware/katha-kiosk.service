@@ -1,0 +1,16 @@
+[Unit]
+Description=Katha AI Counter Terminal Kiosk
+After=network-online.target graphical.target
+Wants=network-online.target
+
+[Service]
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+Environment=KATHA_URL=https://katha-ai.onrender.com
+User=pi
+ExecStart=/bin/bash /home/pi/Katha-AI-/hardware/kiosk_boot.sh
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=graphical.target
