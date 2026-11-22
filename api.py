@@ -2340,6 +2340,59 @@ def api_get_bolna_call(execution_id: str, sync: bool = True):
 
     return JSONResponse(call_record)
 
+@app.get("/api/collections/status/{execution_id}")
+def api_collections_status(execution_id: str):
+    """Call status polling endpoint for Collections Agent UI."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT status, conversation_duration, summary, promise_date, amount_agreed FROM bolna_calls WHERE execution_id = ?", (execution_id,))
+    row = cur.fetchone()
+    conn.close()
+
+    if row:
+        st = str(row["status"] or "").lower()
+        if st in ("completed", "call-disconnected", "done"):
+            return {
+                "status": "completed",
+                "raw_status": st,
+                "duration": row["conversation_duration"] or 0,
+                "summary": row["summary"] or "",
+                "promise_date": row["promise_date"],
+                "amount_agreed": row["amount_agreed"]
+            }
+        elif st in ("failed", "busy", "no-answer"):
+            return {
+                "status": "failed",
+                "raw_status": st,
+                "detail": st
+            }
+        elif st in ("in-progress", "ringing", "queued", "initiated"):
+            return {
+                "status": "in-progress",
+                "raw_status": st,
+                "duration": row["conversation_duration"] or 0
+            }
+
+    # If not in local DB or unknown, check Bolna API directly
+    bolna_key = (os.environ.get("VOICE_API_KEY") or os.environ.get("BOLNA_API_KEY") or BOLNA_API_KEY or "").strip()
+    if bolna_key:
+        try:
+            r = requests.get(f"{BOLNA_BASE_URL}/executions/{execution_id}", headers={"Authorization": f"Bearer {bolna_key}"}, timeout=6)
+            if r.status_code == 200:
+                d = r.json()
+                st = (d.get("status") or "").lower()
+                dur = d.get("conversation_duration") or (d.get("telephony_data") or {}).get("duration", 0)
+                if st in ("completed", "call-disconnected", "done"):
+                    return {"status": "completed", "raw_status": st, "duration": dur}
+                elif st in ("failed", "busy", "no-answer"):
+                    return {"status": "failed", "raw_status": st}
+                elif st in ("in-progress", "ringing", "queued", "initiated"):
+                    return {"status": "in-progress", "raw_status": st, "duration": dur}
+        except Exception:
+            pass
+
+    return {"status": "unknown"}
+
 @app.get("/api/bolna/calls")
 def api_get_all_bolna_calls(limit: int = 50):
     """Retrieve history of all Bolna calls with transcripts and outcomes."""
@@ -3870,3 +3923,5 @@ async def api_collections_outcome_endpoint(request: Request):
         "customer_id": cust_id,
         "outcome": outcome
     })
+
+# Updated: 2026-11-22

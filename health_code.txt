@@ -30,3 +30,4 @@
 779:             bot_response = f"🚛 **Supplier Intelligence:**\n\n• Total Suppliers: {kpis['totalSuppliers']}\n• Total PO Spend: {kpis['totalPOSpend']}\n• Top Suppliers:\n" + "\n".join([f"  • {s['name']}: {s['value']} (Score: {s['reliability']}/10)" for s in top_s])
 785:         elif any(w in msg for w in ["health", "score", "performance"]):
 786:             bot_response = f"🏥 **Business Health Score: {kpis['healthScore']}/100 ({kpis['healthLabel']})**\n\n• Profit Margin Score: {min(kpis['netProfitMargin'] / 0.2, 100):.0f}/100\n• Collection Score: {kpis['collectionRate']:.0f}/100\n• {'✅ Business is performing well.' if kpis['healthScore'] >= 80 else '⚠️ Some areas need attention.'}"
+

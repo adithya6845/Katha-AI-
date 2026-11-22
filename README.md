@@ -184,3 +184,5 @@ On reboot, the Raspberry Pi will automatically launch full-screen into the Katha
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+<!-- Updated: 2026-11-22 -->

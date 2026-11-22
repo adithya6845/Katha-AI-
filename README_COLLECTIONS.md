@@ -194,3 +194,5 @@ curl -X POST http://localhost:8080/api/collections/email-reminder \
 ```bash
 curl -X POST http://localhost:8080/api/collections/undo-last
 ```
+
+<!-- Updated: 2026-11-22 -->

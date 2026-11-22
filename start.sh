@@ -21,3 +21,5 @@ echo "[2/2] Launching Python FastAPI / Uvicorn Server on port ${PORT}..."
 trap "kill $NODE_PID 2>/dev/null || true" EXIT INT TERM
 
 exec python3 -m uvicorn api:app --host 0.0.0.0 --port "${PORT}"
+
+# Updated: 2026-11-22

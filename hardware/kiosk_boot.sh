@@ -36,3 +36,5 @@ exec chromium-browser \
     --overscroll-history-navigation=0 \
     --autoplay-policy=no-user-gesture-required \
     "$KATHA_URL"
+
+# Updated: 2026-11-22

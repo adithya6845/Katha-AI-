@@ -18,3 +18,4 @@
 594:         "netProfitMargin": kpis["netProfitMargin"],
 771:             bot_response = f"💰 **Profit Analysis:**\n\n• Net Profit: **{kpis['netProfitFmt']}** ({kpis['netProfitMargin']}% margin)\n• COGS: {kpis['totalCOGSFmt']}\n• Total Expenses: {kpis['totalExpensesFmt']}\n• {'⚠️ Margin below 20% benchmark. Consider cost reduction.' if kpis['netProfitMargin'] < 20 else '✅ Healthy profit margin above industry benchmark.'}"
 786:             bot_response = f"🏥 **Business Health Score: {kpis['healthScore']}/100 ({kpis['healthLabel']})**\n\n• Profit Margin Score: {min(kpis['netProfitMargin'] / 0.2, 100):.0f}/100\n• Collection Score: {kpis['collectionRate']:.0f}/100\n• {'✅ Business is performing well.' if kpis['healthScore'] >= 80 else '⚠️ Some areas need attention.'}"
+

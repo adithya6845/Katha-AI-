@@ -4,3 +4,5 @@ const nextConfig = {
 };
 
 export default nextConfig;
+
+// Updated: 2026-11-22

@@ -3102,7 +3102,12 @@ function openCollectionsAgentModal(d) {
               </div>
             </div>
             
-            <h4 style="margin:0 0 12px 0; font-size:0.95rem; font-weight:600; color:#f8fafc;">Customer List</h4>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h4 style="margin:0; font-size:0.95rem; font-weight:600; color:#f8fafc;">Customer List</h4>
+              <button id="btnRefreshCollections" title="Refresh all collections records" style="background:#1e293b; color:#38bdf8; border:1px solid rgba(56,189,248,0.3); padding:4px 10px; border-radius:6px; font-size:0.75rem; cursor:pointer; font-weight:600; display:flex; align-items:center; gap:6px; transition:all 0.2s;">
+                <i class="fas fa-sync-alt"></i> Refresh
+              </button>
+            </div>
             
             <div style="display:flex; gap:6px; margin-bottom:12px;">
               <button id="colFilterAll" style="background:#6366f1; color:white; border:none; padding:4px 10px; border-radius:4px; font-size:0.7rem; cursor:pointer;">All</button>
@@ -3134,7 +3139,10 @@ function openCollectionsAgentModal(d) {
                   <h4 id="colDetailsName" style="margin:0 0 4px 0; font-size:1.05rem; font-weight:600; color:#f8fafc;">Customer Details - (Select Customer)</h4>
                   <span id="colDetailsOutstanding" style="font-size:0.75rem; color:#94a3b8;">Outstanding: <strong>--</strong> · <strong>-- days overdue</strong></span>
                 </div>
-                <span id="colDetailsRisk" style="background:rgba(239,68,68,0.1); color:#ef4444; font-size:0.7rem; padding:4px 8px; border-radius:4px; font-weight:600; display:none;">High Risk</span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <button id="btnRefreshCustomerDetails" title="Refresh this customer" style="background:#1e293b; color:#38bdf8; border:1px solid #334155; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.75rem; display:flex; align-items:center; gap:4px;"><i class="fas fa-sync-alt"></i></button>
+                  <span id="colDetailsRisk" style="background:rgba(239,68,68,0.1); color:#ef4444; font-size:0.7rem; padding:4px 8px; border-radius:4px; font-weight:600; display:none;">High Risk</span>
+                </div>
               </div>
               
               <h5 style="margin:0 0 8px 0; font-size:0.8rem; color:#94a3b8; border-bottom:1px solid #334155; padding-bottom:8px;">Recent Timeline</h5>
@@ -3165,8 +3173,46 @@ function openCollectionsAgentModal(d) {
       </div>
     `;
     document.body.appendChild(modal);
-    $('closeCollectionsModalBtn').onclick = () => modal.style.display = 'none';
-    modal.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; };
+    
+    // Close & cleanup timers
+    const cleanupCollectionsTimers = () => {
+      if (window.__currentCallTimer) { clearInterval(window.__currentCallTimer); window.__currentCallTimer = null; }
+      if (window.__currentStatusPoll) { clearInterval(window.__currentStatusPoll); window.__currentStatusPoll = null; }
+      if (window.__collectionsModalAutoSync) { clearInterval(window.__collectionsModalAutoSync); window.__collectionsModalAutoSync = null; }
+    };
+    $('closeCollectionsModalBtn').onclick = () => { modal.style.display = 'none'; cleanupCollectionsTimers(); };
+    modal.onclick = (e) => { if (e.target === modal) { modal.style.display = 'none'; cleanupCollectionsTimers(); } };
+
+    // Refresh Buttons (Manual + Auto)
+    const btnRefAll = $('btnRefreshCollections');
+    if (btnRefAll) {
+      btnRefAll.onclick = async () => {
+        btnRefAll.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Refreshing...';
+        await loadCollectionsData(window.__lastSelectedCustomerId);
+        setTimeout(() => {
+          btnRefAll.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+        }, 400);
+      };
+    }
+
+    const btnRefCust = $('btnRefreshCustomerDetails');
+    if (btnRefCust) {
+      btnRefCust.onclick = async () => {
+        btnRefCust.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i>';
+        await loadCollectionsData(window.__lastSelectedCustomerId);
+        setTimeout(() => {
+          btnRefCust.innerHTML = '<i class="fas fa-sync-alt"></i>';
+        }, 400);
+      };
+    }
+
+    // Auto-refresh Collections modal every 3.5s while open (pauses during active phone call)
+    if (window.__collectionsModalAutoSync) clearInterval(window.__collectionsModalAutoSync);
+    window.__collectionsModalAutoSync = setInterval(async () => {
+      if (modal.style.display !== 'none' && !window.__currentCallTimer) {
+        await loadCollectionsData(window.__lastSelectedCustomerId);
+      }
+    }, 3500);
 
     // Fallback click handler for Call button if clicked before row selection
     const defaultCallBtn = $('btnCollectionsBolnaCall');
@@ -3313,6 +3359,10 @@ function openCollectionsAgentModal(d) {
               showToast('info', 'Call Queued', data.message || `Outbound collection call queued.`);
               btnCall.innerHTML = '<i class="fas fa-phone-volume"></i> On call (00:00)';
 
+              // Clear any existing active timer
+              if (window.__currentCallTimer) clearInterval(window.__currentCallTimer);
+              if (window.__currentStatusPoll) clearInterval(window.__currentStatusPoll);
+
               // Live call duration timer
               let seconds = 0;
               const callTimer = setInterval(() => {
@@ -3321,6 +3371,7 @@ function openCollectionsAgentModal(d) {
                 const s = String(seconds % 60).padStart(2, '0');
                 btnCall.innerHTML = `<i class="fas fa-phone-volume"></i> On call (${m}:${s})`;
               }, 1000);
+              window.__currentCallTimer = callTimer;
 
               // Poll post-call status from backend
               const executionId = data.execution_id;
@@ -3330,33 +3381,50 @@ function openCollectionsAgentModal(d) {
                 if (pollCount > 120) {
                   clearInterval(callTimer);
                   clearInterval(statusPollInterval);
+                  window.__currentCallTimer = null;
+                  window.__currentStatusPoll = null;
                   btnCall.disabled = false;
                   btnCall.innerHTML = '<i class="fas fa-phone-volume"></i> Call with Meera';
                   return;
                 }
                 try {
-                  const sRes = await fetch(`/api/collections/status/${executionId}`);
-                  if (sRes.ok) {
-                    const sData = await sRes.json();
-                    if (sData.status === 'completed' || sData.status === 'done') {
-                      clearInterval(callTimer);
-                      clearInterval(statusPollInterval);
-                      btnCall.innerHTML = '<i class="fas fa-check"></i> Call ended';
-                      showToast('success', 'Call Completed', `Call with ${customerName} completed.`);
-                      setTimeout(() => {
-                        loadCollectionsData(item.CustomerID);
-                      }, 2000);
-                    } else if (sData.status === 'failed') {
-                      clearInterval(callTimer);
-                      clearInterval(statusPollInterval);
-                      btnCall.disabled = false;
-                      btnCall.innerHTML = '<i class="fas fa-redo"></i> Failed (Retry)';
-                      showToast('warning', 'Call Status', `Call ended: ${sData.detail || 'failed'}`);
-                      loadCollectionsData(item.CustomerID);
-                    }
+                  let sData = null;
+                  try {
+                    const sRes = await fetch(`/api/collections/status/${executionId}`);
+                    if (sRes.ok) sData = await sRes.json();
+                  } catch (e) {}
+
+                  // Fallback: query Bolna execution sync directly
+                  if (!sData || sData.status === 'unknown') {
+                    try {
+                      const bRes = await fetch(`${API_BASE}/api/bolna/call/${executionId}?sync=true`);
+                      if (bRes.ok) sData = await bRes.json();
+                    } catch (e) {}
+                  }
+
+                  const st = (sData && sData.status ? sData.status : '').toLowerCase();
+                  if (st === 'completed' || st === 'done' || st === 'call-disconnected') {
+                    clearInterval(callTimer);
+                    clearInterval(statusPollInterval);
+                    window.__currentCallTimer = null;
+                    window.__currentStatusPoll = null;
+                    btnCall.disabled = false;
+                    btnCall.innerHTML = '<i class="fas fa-check-circle"></i> Call ended';
+                    showToast('success', 'Call Completed', `Call with ${customerName} completed.`);
+                    await loadCollectionsData(item.CustomerID);
+                  } else if (st === 'failed' || st === 'busy' || st === 'no-answer') {
+                    clearInterval(callTimer);
+                    clearInterval(statusPollInterval);
+                    window.__currentCallTimer = null;
+                    window.__currentStatusPoll = null;
+                    btnCall.disabled = false;
+                    btnCall.innerHTML = '<i class="fas fa-redo"></i> Failed (Retry)';
+                    showToast('warning', 'Call Status', `Call ended: ${sData.detail || st}`);
+                    await loadCollectionsData(item.CustomerID);
                   }
                 } catch (e) {}
-              }, 4000);
+              }, 2000);
+              window.__currentStatusPoll = statusPollInterval;
 
             } catch (err) {
               btnCall.disabled = false;
@@ -3420,6 +3488,7 @@ function openCollectionsAgentModal(d) {
     // Helper: Select customer and populate details, timeline & recommendations
     function selectCollectionsCustomer(item, trEl) {
       selectedCollectionsCustomer = item;
+      window.__lastSelectedCustomerId = item.CustomerID;
 
       const overdue = parseInt(item.DaysOverdue) || 0;
       const amount = parseFloat(item.AmountPending) || 0;
@@ -3637,10 +3706,11 @@ function openCollectionsAgentModal(d) {
         tr.onclick = () => selectCollectionsCustomer(item, tr);
         tbody.appendChild(tr);
 
-        if (preserveSelectedId && String(item.CustomerID).toLowerCase() === String(preserveSelectedId).toLowerCase()) {
+        const targetId = preserveSelectedId || window.__lastSelectedCustomerId;
+        if (targetId && String(item.CustomerID).toLowerCase() === String(targetId).toLowerCase()) {
           selectedTr = tr;
           selectedItemToSet = item;
-        } else if (!preserveSelectedId && idx === 0) {
+        } else if (!targetId && idx === 0) {
           selectedTr = tr;
           selectedItemToSet = item;
         }
@@ -5806,3 +5876,5 @@ setInterval(async () => {
 
 
 
+
+// Updated: 2026-11-22

@@ -176,3 +176,4 @@ SUP_INT00174,SUP040,2025-05-20,Phone Call,Quality Complaint,"Customer-facing qua
 SUP_INT00175,SUP040,2025-06-03,In-Person Visit,Delivery Confirmed,"Order delivered on schedule, quality verified"
 SUP_INT00176,SUP040,2025-06-18,Email,Delivery Confirmed,"Order delivered on schedule, quality verified"
 SUP_INT00177,SUP040,2025-06-29,WhatsApp,Order Placed,New purchase order confirmed via WhatsApp
+

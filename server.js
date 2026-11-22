@@ -306,7 +306,7 @@ const activeCallWatchers = new Map(); // executionId -> status details
 
 // Background post-call watcher
 async function pollBolnaExecution(executionId, customerId) {
-  const bolnaApiKey = process.env.BOLNA_API_KEY;
+  const bolnaApiKey = process.env.VOICE_API_KEY || process.env.API_KEY || process.env.BOLNA_API_KEY;
   if (!bolnaApiKey || !executionId) return;
 
   let pollCount = 0;
@@ -331,8 +331,8 @@ async function pollBolnaExecution(executionId, customerId) {
       const data = await res.json();
       const status = (data.status || '').toLowerCase();
 
-      // "never read data on 'call-disconnected'", only on completed or final failed state
-      if (status === 'call-disconnected' || status === 'in-progress' || status === 'ringing') {
+      // In-progress states
+      if (status === 'in-progress' || status === 'ringing' || status === 'queued' || status === 'initiated') {
         activeCallWatchers.set(executionId, {
           status: 'in-progress',
           duration: data.conversation_duration || 0
@@ -340,9 +340,10 @@ async function pollBolnaExecution(executionId, customerId) {
         return;
       }
 
-      if (status === 'completed' || status === 'done') {
+      // Terminal completed states (including call-disconnected)
+      if (status === 'completed' || status === 'done' || status === 'call-disconnected') {
         clearInterval(timer);
-        const duration = Math.round(data.conversation_duration || 0);
+        const duration = Math.round(data.conversation_duration || (data.telephony_data && data.telephony_data.duration) || 0);
         const summary = data.summary || 'Call completed successfully';
 
         activeCallWatchers.set(executionId, {
@@ -526,10 +527,40 @@ app.get('/api/collections/receivables', async (req, res) => {
 });
 
 // GET /api/collections/status/:executionId - Call status polling endpoint
-app.get('/api/collections/status/:executionId', (req, res) => {
+app.get('/api/collections/status/:executionId', async (req, res) => {
   const { executionId } = req.params;
-  const statusInfo = activeCallWatchers.get(executionId) || { status: 'unknown' };
-  res.json(statusInfo);
+  const statusInfo = activeCallWatchers.get(executionId);
+  if (statusInfo && statusInfo.status !== 'unknown') {
+    return res.json(statusInfo);
+  }
+  // Fallback to Bolna upstream directly
+  const bolnaApiKey = process.env.VOICE_API_KEY || process.env.API_KEY || process.env.BOLNA_API_KEY;
+  if (bolnaApiKey && executionId) {
+    try {
+      const bRes = await fetch(`https://api.bolna.ai/executions/${executionId}`, {
+        headers: { 'Authorization': `Bearer ${bolnaApiKey}` }
+      });
+      if (bRes.ok) {
+        const bData = await bRes.json();
+        const st = String(bData.status || '').toLowerCase();
+        const dur = bData.conversation_duration || (bData.telephony_data && bData.telephony_data.duration) || 0;
+        if (['completed', 'call-disconnected', 'done'].includes(st)) {
+          const result = { status: 'completed', raw_status: st, duration: dur, summary: bData.summary || '' };
+          activeCallWatchers.set(executionId, result);
+          return res.json(result);
+        } else if (['failed', 'busy', 'no-answer'].includes(st)) {
+          const result = { status: 'failed', raw_status: st, duration: dur };
+          activeCallWatchers.set(executionId, result);
+          return res.json(result);
+        } else if (['in-progress', 'ringing', 'queued', 'initiated'].includes(st)) {
+          return res.json({ status: 'in-progress', raw_status: st, duration: dur });
+        }
+      }
+    } catch (e) {
+      console.warn('Fallback Bolna status fetch error:', e.message);
+    }
+  }
+  res.json({ status: 'unknown' });
 });
 
 // POST /api/collections/call { customerId }
@@ -777,36 +808,25 @@ app.post('/api/collections/outcome', async (req, res) => {
       const recSheet = workbook.getWorksheet('Receivables');
       const logSheet = workbook.getWorksheet('CollectionsLog');
 
-      let custRow = null;
+      const matchingRows = [];
       recSheet.eachRow((row, rowNumber) => {
         if (rowNumber === 1) return;
-        if (String(row.getCell(1).value).trim().toLowerCase() === customer_id.toLowerCase()) {
-          custRow = row;
+        if (String(row.getCell(1).value).trim().toLowerCase() === customer_id.toLowerCase() ||
+            String(row.getCell(2).value).trim().toLowerCase() === customer_id.toLowerCase()) {
+          matchingRows.push(row);
         }
       });
 
-      if (!custRow) {
-        // Fallback: search by customer name
-        recSheet.eachRow((row, rowNumber) => {
-          if (rowNumber === 1) return;
-          if (String(row.getCell(2).value).trim().toLowerCase() === customer_id.toLowerCase()) {
-            custRow = row;
-          }
-        });
-      }
-
-      if (!custRow) {
+      if (matchingRows.length === 0) {
         throw new Error(`Customer '${customer_id}' not found in collections records`);
       }
 
+      const custRow = matchingRows[0];
       const custName = custRow.getCell(2).value || 'Customer';
       const invId = custRow.getCell(5).value || '';
       const pendingBefore = parseFloat(custRow.getCell(7).value) || 0;
       const currentAttempts = (parseInt(custRow.getCell(21).value) || 0) + 1;
       const nowStr = formatDateTime();
-
-      custRow.getCell(21).value = currentAttempts; // AttemptCount
-      custRow.getCell(22).value = nowStr;          // LastContact
 
       let amountPromised = '';
       let promiseDate = '';
@@ -817,56 +837,80 @@ app.post('/api/collections/outcome', async (req, res) => {
         case 'promise_to_pay':
           amountPromised = cleanAmount > 0 ? cleanAmount : pendingBefore;
           promiseDate = date || formatDateOnly();
-          custRow.getCell(11).value = 'Promise made'; // Status
-          custRow.getCell(12).value = amountPromised;  // PromiseAmount
-          custRow.getCell(13).value = promiseDate;     // PromiseDate
-          custRow.getCell(23).value = addDaysToDate(promiseDate, 1); // NextFollowUp = promise + 1 day
           readableNote = `${custName} promised ${formatINR(amountPromised)} by ${promiseDate}`;
           break;
 
         case 'payment_claimed':
-          // DO NOT reduce AmountPending!
           claimedAmount = cleanAmount > 0 ? cleanAmount : pendingBefore;
-          custRow.getCell(11).value = 'Payment claimed (verify)';
-          custRow.getCell(14).value = 'Yes';
-          custRow.getCell(15).value = claimedAmount;
-          custRow.getCell(16).value = mode || 'UPI';
           readableNote = `${custName} claimed payment of ${formatINR(claimedAmount)} via ${mode || 'UPI'}. Verification pending.`;
           break;
 
         case 'callback_requested':
-          custRow.getCell(11).value = 'Callback scheduled';
-          custRow.getCell(17).value = callback_time || 'Tomorrow';
           readableNote = `${custName} requested callback at ${callback_time || 'Tomorrow'}.`;
           break;
 
         case 'extension_requested':
-          custRow.getCell(11).value = 'Needs approval';
           readableNote = `${custName} requested extension until ${date || 'later'}. Reason: ${reason || 'Cash flow'}.`;
           break;
 
         case 'dispute':
-          custRow.getCell(11).value = 'Disputed';
-          custRow.getCell(18).value = 'Yes';
-          custRow.getCell(19).value = reason || 'Customer disputes invoice';
           readableNote = `${custName} disputed invoice ${invId}. Reason: ${reason || 'Incorrect billing'}.`;
           break;
 
         case 'wrong_person':
-          custRow.getCell(11).value = 'Do not call';
-          custRow.getCell(20).value = 'Yes';
           readableNote = `Wrong contact number for ${custName}. Marked as Do not call.`;
           break;
 
         case 'refused':
-          custRow.getCell(11).value = 'Unresolved';
           readableNote = `${custName} refused to pay. Escalation recommended.`;
           break;
 
         default:
-          custRow.getCell(11).value = 'Follow-up pending';
           readableNote = `${custName} collection outcome: ${outcome}.`;
           break;
+      }
+
+      // Apply outcome to all invoices of this customer
+      for (const row of matchingRows) {
+        row.getCell(21).value = currentAttempts; // AttemptCount
+        row.getCell(22).value = nowStr;          // LastContact
+
+        switch (outcome) {
+          case 'promise_to_pay':
+            row.getCell(11).value = 'Promise made';
+            row.getCell(12).value = amountPromised;
+            row.getCell(13).value = promiseDate;
+            row.getCell(23).value = addDaysToDate(promiseDate, 1);
+            break;
+          case 'payment_claimed':
+            row.getCell(11).value = 'Payment claimed (verify)';
+            row.getCell(14).value = 'Yes';
+            row.getCell(15).value = claimedAmount;
+            row.getCell(16).value = mode || 'UPI';
+            break;
+          case 'callback_requested':
+            row.getCell(11).value = 'Callback scheduled';
+            row.getCell(17).value = callback_time || 'Tomorrow';
+            break;
+          case 'extension_requested':
+            row.getCell(11).value = 'Needs approval';
+            break;
+          case 'dispute':
+            row.getCell(11).value = 'Disputed';
+            row.getCell(18).value = 'Yes';
+            row.getCell(19).value = reason || 'Customer disputes invoice';
+            break;
+          case 'wrong_person':
+            row.getCell(11).value = 'Do not call';
+            row.getCell(20).value = 'Yes';
+            break;
+          case 'refused':
+            row.getCell(11).value = 'Unresolved';
+            break;
+          default:
+            row.getCell(11).value = 'Follow-up pending';
+            break;
+        }
       }
 
       // Append entry to CollectionsLog sheet
@@ -1433,3 +1477,5 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`SME Ledger & Collections Server running on port ${PORT}`);
 });
+
+// Updated: 2026-11-22

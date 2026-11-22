@@ -26,3 +26,5 @@ export default function RootLayout({ children }) {
     </html>
   );
 }
+
+// Updated: 2026-11-22

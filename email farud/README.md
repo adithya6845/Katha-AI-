@@ -6,3 +6,5 @@ All bank accounts, UPI IDs, GSTINs, phones, domains and emails are fake, generat
 - incoming_emails.csv: 100 labeled emails (60 Legit, 40 Fraud) dated 2025-07-01 to 07-21, with Label, ScamType, ExpectedFlags, ExpectedAction (PASS / REVIEW / HOLD).
 - known_bad_indicators.csv: blocklist of scam domains, accounts, UPIs, URLs, phones (covers only about half the fraud emails on purpose).
 Note: 3 legit emails announce a genuine bank change; they should be REVIEW (callback verification), never auto-PASS.
+
+<!-- Updated: 2026-11-22 -->

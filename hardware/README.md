@@ -118,3 +118,5 @@ sudo systemctl start katha-kiosk.service
 - **Hands-Free Operation**: Shop owners can speak directly to the terminal using the voice mic ("Call the customer", "Call the supplier", "Check udhaar").
 - **Real-Time Sound Box**: Plays audible alerts whenever a customer payment is claimed or verified.
 - **Always-On Dashboard**: Displays active revenue, overdue receivables, and low stock items on the shop counter.
+
+<!-- Updated: 2026-11-22 -->
