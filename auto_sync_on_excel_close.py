@@ -17,7 +17,10 @@ def is_file_locked(filepath):
     except IOError:
         return True
 
+last_ledger_count = -1
+
 def sync_ledger():
+    global last_ledger_count
     if is_file_locked(ROOT_LEDGER):
         return False
 
@@ -28,6 +31,9 @@ def sync_ledger():
         rows = cur.fetchall()
         conn.close()
 
+        if len(rows) == last_ledger_count:
+            return True
+
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Ledger"
@@ -37,6 +43,7 @@ def sync_ledger():
 
         wb.save(ROOT_LEDGER)
         wb.save(LATEST_LEDGER)
+        last_ledger_count = len(rows)
         print(f"[Auto-Sync] Synchronized {len(rows)} entries to {ROOT_LEDGER}!")
         return True
     except Exception as e:

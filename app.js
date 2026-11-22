@@ -2935,6 +2935,14 @@ async function sendChat(inputEl, container) {
       const data = await res.json();
       typing.remove();
       appendMsg(container, data.response || "I couldn't process that request.", false);
+      if (data.action === 'ledger_updated') {
+        if (typeof showToast === 'function') {
+          showToast('success', 'Katha Ledger Updated', `Recorded ₹${(data.amount || 0).toLocaleString('en-IN')} for ${data.customer_name}.`);
+        }
+        if (typeof loadLedgerTable === 'function') {
+          loadLedgerTable();
+        }
+      }
       return;
     }
   } catch (err) {
@@ -4980,7 +4988,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (resultActions) resultActions.style.display = 'flex';
         gnaniVoice.currentTranscript = query;
-        gnaniVoice.askAIAdvisor(query);
+        const handled = handleGnaniVoiceCommand(query);
+        if (!handled) {
+          gnaniVoice.askAIAdvisor(query);
+        }
       }
     };
   });
@@ -5137,7 +5148,135 @@ class GnaniWavRecorder {
   }
 }
 
-// ─── GNANI VOICE INTENT HANDLER (Call Supplier / Call Customer) ──────────────
+// ─── GNANI VOICE INTENT HANDLER (Call Supplier / Call Customer / Ledger Katha) ──
+function parseLedgerVoiceIntent(text) {
+  if (!text || typeof text !== 'string') return null;
+  const t = text.trim().toLowerCase();
+
+  const keywords = ['paid', 'pay', 'payment', 'gave', 'given', 'received', 'receive', 'diya', 'liya', 'mila', 'credit', 'udhar', 'udhaar', 'borrow', 'borrowed', 'jama', 'settled', 'katha', 'ledger'];
+  const hasKeyword = keywords.some(k => t.includes(k));
+  if (!hasKeyword) return null;
+
+  let amount = null;
+  // Match '3k', '3.5k', etc.
+  const mK = t.match(/(\d+(?:\.\d+)?)\s*k\b/i);
+  if (mK) {
+    amount = parseFloat(mK[1]) * 1000;
+  }
+  if (!amount) {
+    const mLakh = t.match(/(\d+(?:\.\d+)?)\s*(?:lakh|lac)s?\b/i);
+    if (mLakh) amount = parseFloat(mLakh[1]) * 100000;
+  }
+  if (!amount) {
+    const mNum = t.match(/(?:rs\.?|inr|rupees?)?\s*(\d+(?:,\d+)*(?:\.\d+)?)\s*(?:rs\.?|inr|rupees?)?/i);
+    if (mNum) {
+      const raw = mNum[1].replace(/,/g, '');
+      const val = parseFloat(raw);
+      if (val > 0) amount = val;
+    }
+  }
+
+  if (!amount || isNaN(amount) || amount <= 0) return null;
+
+  let entryType = 'payment_received';
+  if (/credit|udhar|udhaar|borrow|borrowed|diya udhar/i.test(t)) {
+    entryType = 'credit_given';
+  } else if (/missed|late|due|delay/i.test(t)) {
+    entryType = 'payment_missed';
+  }
+
+  let tClean = t.replace(/(\d+(?:\.\d+)?\s*k\b|\d+(?:,\d+)*(?:\.\d+)?|\brupees?\b|\brs\.?\b|\binr\b|\btoday\b|\baaj\b|\bme\b|\bmujhe\b|\bko\b|\bne\b|\bfrom\b|\bto\b|\bby\b|\bplease\b|\brecord\b|\badd\b|\benter\b|\bupdate\b|\bkatha\b|\bledger\b)/gi, ' ');
+  tClean = tClean.replace(/\b(paid|pay|payment|gave|give|received|receive|diya|liya|mila|credit|udhar|udhaar|borrowed|borrow|took|take|jama|settled|cash|online|upi)\b/gi, ' ');
+  const ignoreWords = ['the', 'in', 'is', 'a', 'an', 'at', 'on', 'for', 'of', 'and', 'my', 'store', 'shop'];
+  const words = tClean.trim().split(/\s+/).filter(w => w.length > 1 && !ignoreWords.includes(w));
+  const customerName = words.length > 0 ? words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : 'Customer';
+
+  return {
+    customer_name: customerName,
+    type: entryType,
+    amount: amount,
+    transcript: text.trim(),
+    notes: `Voice entry via Gnani AI: ${text.trim()}`
+  };
+}
+
+async function executeLedgerVoiceEntry(ledgerMatch) {
+  const statusText = document.getElementById('gnaniHeroStatus');
+  const transcriptText = document.getElementById('gnaniTranscriptText');
+  if (statusText) {
+    statusText.innerHTML = `<span style="color:#10b981; font-weight:700;"><i class="fas fa-spinner fa-spin"></i> Updating Katha Ledger with ₹${ledgerMatch.amount.toLocaleString('en-IN')} from ${ledgerMatch.customer_name}...</span>`;
+  }
+  if (typeof showToast === 'function') {
+    showToast('info', 'Updating Katha Ledger', `Recording ₹${ledgerMatch.amount.toLocaleString('en-IN')} payment from ${ledgerMatch.customer_name}...`);
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/ledger/voice-entry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ledgerMatch)
+    });
+    const data = await res.json();
+
+    if (res.ok && data.status === 'success') {
+      const msg = data.message || `Recorded ₹${ledgerMatch.amount.toLocaleString('en-IN')} from ${ledgerMatch.customer_name} into Katha ledger sheet.`;
+      if (typeof showToast === 'function') {
+        showToast('success', 'Katha Ledger Updated', `✓ ${msg}`);
+      }
+      if (statusText) {
+        statusText.innerHTML = `<span style="color:#10b981; font-weight:700;">✓ Katha Ledger Updated:</span> Recorded <strong>₹${ledgerMatch.amount.toLocaleString('en-IN')}</strong> from <strong>${ledgerMatch.customer_name}</strong> in <code style="color:#10b981;">data/ledger.xlsx</code>`;
+      }
+      if (transcriptText) {
+        transcriptText.innerHTML = `<strong>"${ledgerMatch.transcript}"</strong> <span style="font-size:0.75rem; color:#10b981; font-weight:700; margin-left:8px;"><i class="fas fa-check-circle"></i> Synced with data/ledger.xlsx</span>`;
+      }
+
+      // Voice audio confirmation via Web Speech Synthesis
+      if ('speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+          const voiceMsg = new SpeechSynthesisUtterance(data.voice_response || `${ledgerMatch.customer_name}'s payment of ${ledgerMatch.amount} rupees has been recorded in your Katha ledger sheet.`);
+          voiceMsg.lang = 'en-IN';
+          voiceMsg.rate = 1.0;
+          window.speechSynthesis.speak(voiceMsg);
+        } catch (e) {}
+      }
+
+      // Automatically open or refresh the Ledger Agent Modal so user sees the newly added entry!
+      setTimeout(async () => {
+        if (typeof openLedgerAgentModal === 'function') {
+          await openLedgerAgentModal(null, false);
+        }
+        if (typeof loadLedgerTable === 'function') {
+          await loadLedgerTable();
+        }
+      }, 500);
+
+      // Close Gnani popover after 3 seconds
+      setTimeout(() => {
+        if (typeof gnaniVoice !== 'undefined' && gnaniVoice.closePopover) {
+          gnaniVoice.closePopover();
+        }
+      }, 3000);
+
+    } else {
+      if (statusText) {
+        statusText.innerHTML = `<span style="color:#ef4444; font-weight:700;">Ledger Update Failed:</span> ${data.message || 'Error recording entry'}`;
+      }
+      if (typeof showToast === 'function') {
+        showToast('error', 'Ledger Error', data.message || 'Failed to update ledger.');
+      }
+    }
+  } catch (err) {
+    console.error('Ledger voice entry error:', err);
+    if (statusText) {
+      statusText.innerHTML = `<span style="color:#ef4444; font-weight:700;">Network Error:</span> Could not reach ledger API.`;
+    }
+    if (typeof showToast === 'function') {
+      showToast('error', 'Network Error', 'Could not reach ledger API.');
+    }
+  }
+}
+
 function handleGnaniVoiceCommand(rawTranscript) {
   if (!rawTranscript || typeof rawTranscript !== 'string') return false;
   const t = rawTranscript.trim().toLowerCase();
@@ -5186,9 +5325,20 @@ function handleGnaniVoiceCommand(rawTranscript) {
     return true;
   }
 
+  // 3. Ledger / Katha Voice Intent:
+  // e.g. "arun paid me today 3k", "arun paid 3k", "arun gave 3000", "arun ne 3000 diya", "arun took credit 500"
+  const ledgerMatch = parseLedgerVoiceIntent(rawTranscript);
+  if (ledgerMatch) {
+    console.log('[Gnani STT Intent] Matched Ledger / Katha Voice Entry:', ledgerMatch);
+    executeLedgerVoiceEntry(ledgerMatch);
+    return true;
+  }
+
   return false;
 }
 window.handleGnaniVoiceCommand = handleGnaniVoiceCommand;
+window.parseLedgerVoiceIntent = parseLedgerVoiceIntent;
+window.executeLedgerVoiceEntry = executeLedgerVoiceEntry;
 
 // Global Gnani Voice Manager
 const gnaniVoice = {

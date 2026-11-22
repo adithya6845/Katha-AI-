@@ -1435,6 +1435,79 @@ app.post('/api/ledger', async (req, res) => {
   }
 });
 
+// POST /api/ledger/voice-entry (Gnani Voice AI STT integration)
+app.post('/api/ledger/voice-entry', async (req, res) => {
+  try {
+    const { transcript, customer_name, type, amount, notes } = req.body;
+    let custName = (customer_name || '').trim();
+    let entryType = (type || '').trim().toLowerCase();
+    let cleanAmount = parseFloat(String(amount || '').replace(/[^0-9.-]+/g, ''));
+
+    // If not pre-parsed, parse from transcript
+    if ((!custName || !entryType || isNaN(cleanAmount) || cleanAmount <= 0) && transcript) {
+      const t = transcript.trim().toLowerCase();
+      // Amount
+      const mK = t.match(/(\d+(?:\.\d+)?)\s*k\b/i);
+      if (mK) cleanAmount = parseFloat(mK[1]) * 1000;
+      if (!cleanAmount || isNaN(cleanAmount)) {
+        const mLakh = t.match(/(\d+(?:\.\d+)?)\s*(?:lakh|lac)s?\b/i);
+        if (mLakh) cleanAmount = parseFloat(mLakh[1]) * 100000;
+      }
+      if (!cleanAmount || isNaN(cleanAmount)) {
+        const mNum = t.match(/(?:rs\.?|inr|rupees?)?\s*(\d+(?:,\d+)*(?:\.\d+)?)/i);
+        if (mNum) cleanAmount = parseFloat(mNum[1].replace(/,/g, ''));
+      }
+
+      // Type
+      if (/credit|udhar|udhaar|borrow|borrowed|diya udhar/i.test(t)) {
+        entryType = 'credit_given';
+      } else if (/missed|late|due|delay/i.test(t)) {
+        entryType = 'payment_missed';
+      } else {
+        entryType = 'payment_received';
+      }
+
+      // Customer name
+      let tClean = t.replace(/(\d+(?:\.\d+)?\s*k\b|\d+(?:,\d+)*(?:\.\d+)?|\brupees?\b|\brs\.?\b|\binr\b|\btoday\b|\baaj\b|\bme\b|\bmujhe\b|\bko\b|\bne\b|\bfrom\b|\bto\b|\bby\b|\bplease\b|\brecord\b|\badd\b|\benter\b|\bupdate\b)/gi, ' ');
+      tClean = tClean.replace(/\b(paid|pay|payment|gave|give|received|receive|diya|liya|mila|credit|udhar|udhaar|borrowed|borrow|took|take|jama|settled|cash|online|upi)\b/gi, ' ');
+      const ignoreWords = ['the', 'in', 'is', 'a', 'an', 'at', 'on', 'for', 'of', 'and', 'my', 'store', 'shop'];
+      const words = tClean.trim().split(/\s+/).filter(w => w.length > 1 && !ignoreWords.includes(w));
+      custName = words.length > 0 ? words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : 'Customer';
+    }
+
+    if (!custName) {
+      return res.status(400).json({ status: 'error', message: 'Could not identify customer name from voice transcript.' });
+    }
+    if (!VALID_TYPES.includes(entryType)) {
+      entryType = 'payment_received';
+    }
+    if (isNaN(cleanAmount) || cleanAmount <= 0) {
+      return res.status(400).json({ status: 'error', message: 'Could not identify valid payment amount from voice transcript.' });
+    }
+
+    const { newBalance, date } = await recordTransactionToExcel({
+      customer_name: custName,
+      type: entryType,
+      amount: cleanAmount,
+      notes: notes || `Voice entry via Gnani AI: ${transcript || `${custName} ${entryType} ${cleanAmount}`}`
+    });
+
+    const displayType = entryType.replace('_', ' ');
+    res.json({
+      status: 'success',
+      message: `Updated ledger in Excel. ${custName}: recorded ${displayType} of ₹${cleanAmount.toLocaleString('en-IN')}. Current balance is ₹${newBalance.toLocaleString('en-IN')}.`,
+      customer_name: custName,
+      type: entryType,
+      amount: cleanAmount,
+      balance: newBalance,
+      date,
+      voice_response: `Recorded payment of ₹${cleanAmount.toLocaleString('en-IN')} from ${custName} in Katha ledger sheet.`
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
 app.get('/api/ledger/recent', async (req, res) => {
   try {
     if (!fs.existsSync(LEDGER_PATH)) {

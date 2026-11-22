@@ -2477,6 +2477,34 @@ def api_chat(req: ChatRequest):
     # Extract matching product context dynamically based on user query
     conn = get_db()
     cur = conn.cursor()
+
+    # Check if this is a Ledger / Katha voice entry (e.g., "arun paid me today 3k")
+    ledger_parsed = parse_ledger_voice_transcript(req.message)
+    if ledger_parsed:
+        cust_name = ledger_parsed["customer_name"]
+        entry_type = ledger_parsed["type"]
+        clean_amount = ledger_parsed["amount"]
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        notes = f"Chat/Voice entry via Gnani AI: {req.message.strip()}"
+        new_balance = update_excel_ledger(cust_name, entry_type, clean_amount, notes=notes, date_str=now_str)
+        try:
+            cur.execute(
+                "INSERT INTO ledger_entries (customer_name, type, amount, balance, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (cust_name, entry_type, clean_amount, new_balance, notes, now_str)
+            )
+            conn.commit()
+        except Exception:
+            pass
+        conn.close()
+        display_type = entry_type.replace("_", " ")
+        return JSONResponse({
+            "response": f"✅ **Katha Ledger Updated!**\n\n- **Customer:** {cust_name}\n- **Transaction:** {display_type.title()}\n- **Amount:** ₹{clean_amount:,.2f}\n- **Updated Balance:** ₹{new_balance:,.2f}\n- **Saved In:** `data/ledger.xlsx` (`Ledger` & `Customers` sheets)\n\nEntry has been recorded in your Katha ledger sheet and synchronized.",
+            "action": "ledger_updated",
+            "customer_name": cust_name,
+            "amount": clean_amount,
+            "type": entry_type,
+            "balance": new_balance
+        })
     
     # Check if this is a supplier / procurement query
     is_supplier_query = any(k in msg for k in [
@@ -3736,6 +3764,130 @@ async def post_ledger_entry(request: Request):
         "balance": new_balance,
         "date": now_str,
         "entry_id": entry_id
+    })
+
+def parse_ledger_voice_transcript(text: str):
+    if not text:
+        return None
+    t = text.strip().lower()
+
+    keywords = ['paid', 'pay', 'payment', 'gave', 'given', 'received', 'receive', 'diya', 'liya', 'mila', 'credit', 'udhar', 'udhaar', 'borrow', 'borrowed', 'jama', 'settled']
+    if not any(k in t for k in keywords):
+        return None
+
+    amount = None
+    m_k = re.search(r'(\d+(?:\.\d+)?)\s*k\b', t)
+    if m_k:
+        amount = float(m_k.group(1)) * 1000
+    if not amount:
+        m_lakh = re.search(r'(\d+(?:\.\d+)?)\s*(?:lakh|lac)s?\b', t)
+        if m_lakh:
+            amount = float(m_lakh.group(1)) * 100000
+    if not amount:
+        m_num = re.search(r'(?:rs\.?|inr|rupees?)?\s*(\d+(?:,\d+)*(?:\.\d+)?)\s*(?:rs\.?|inr|rupees?)?', t)
+        if m_num:
+            raw = m_num.group(1).replace(',', '')
+            try:
+                val = float(raw)
+                if val > 0:
+                    amount = val
+            except Exception:
+                pass
+
+    if not amount or amount <= 0:
+        return None
+
+    if any(k in t for k in ['credit', 'udhar', 'udhaar', 'borrow', 'borrowed', 'diya udhar']):
+        entry_type = 'credit_given'
+    elif any(k in t for k in ['missed', 'late', 'due', 'delay']):
+        entry_type = 'payment_missed'
+    else:
+        entry_type = 'payment_received'
+
+    t_clean = re.sub(r'(\d+(?:\.\d+)?\s*k\b|\d+(?:,\d+)*(?:\.\d+)?|\brupees?\b|\brs\.?\b|\binr\b|\btoday\b|\baaj\b|\bme\b|\bmujhe\b|\bko\b|\bne\b|\bfrom\b|\bto\b|\bby\b|\bplease\b|\brecord\b|\badd\b|\benter\b|\bupdate\b)', ' ', t)
+    t_clean = re.sub(r'\b(paid|pay|payment|gave|give|received|receive|diya|liya|mila|credit|udhar|udhaar|borrowed|borrow|took|take|jama|settled|cash|online|upi)\b', ' ', t_clean)
+    ignore_words = {'the', 'in', 'is', 'a', 'an', 'at', 'on', 'for', 'of', 'and', 'my', 'store', 'shop'}
+    words = [w for w in t_clean.strip().split() if len(w) > 1 and w not in ignore_words]
+
+    customer_name = ' '.join(words).title() if words else 'Customer'
+
+    return {
+        'customer_name': customer_name,
+        'type': entry_type,
+        'amount': amount,
+        'transcript': text.strip()
+    }
+
+@app.post("/api/ledger/voice-entry")
+async def api_ledger_voice_entry(request: Request):
+    """
+    Voice Ledger Entry: Receives voice transcript from Gnani AI STT
+    (e.g., 'arun paid me today 3k'), parses customer name, payment type, amount,
+    and updates data/ledger.xlsx, ledger.xlsx, and sme_data.db in real-time.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    transcript = str(body.get("transcript") or "").strip()
+    cust_name = str(body.get("customer_name") or "").strip()
+    entry_type = str(body.get("type") or "").strip().lower()
+    raw_amount = body.get("amount")
+
+    if not cust_name or not entry_type or not raw_amount:
+        parsed = parse_ledger_voice_transcript(transcript)
+        if parsed:
+            cust_name = cust_name or parsed.get("customer_name", "")
+            entry_type = entry_type or parsed.get("type", "payment_received")
+            raw_amount = raw_amount or parsed.get("amount", 0.0)
+
+    if not cust_name:
+        return JSONResponse({"status": "error", "message": "Could not identify customer name from voice transcript."}, status_code=400)
+
+    if entry_type not in VALID_LEDGER_TYPES:
+        entry_type = "payment_received"
+
+    try:
+        clean_amount = float(str(raw_amount).replace(",", "").replace("₹", "").strip() or 0)
+    except Exception:
+        clean_amount = 0.0
+
+    if clean_amount <= 0:
+        return JSONResponse({"status": "error", "message": "Could not identify a valid payment amount from voice transcript."}, status_code=400)
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    notes = str(body.get("notes") or f"Voice entry via Gnani AI: {transcript}").strip()
+
+    # Update Excel data/ledger.xlsx (Ledger & Customers sheets) and root ledger.xlsx
+    new_balance = update_excel_ledger(cust_name, entry_type, clean_amount, phone=str(body.get("phone") or ""), notes=notes, date_str=now_str)
+
+    # Insert into SQLite ledger_entries table
+    entry_id = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ledger_entries (customer_name, type, amount, balance, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (cust_name, entry_type, clean_amount, new_balance, notes, now_str)
+        )
+        entry_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"SQLite ledger insert error: {e}")
+
+    display_type = entry_type.replace("_", " ")
+    return JSONResponse({
+        "status": "success",
+        "message": f"Updated ledger in Excel. {cust_name}: recorded {display_type} of ₹{clean_amount:,.2f}. Current balance is ₹{new_balance:,.2f}.",
+        "customer_name": cust_name,
+        "type": entry_type,
+        "amount": clean_amount,
+        "balance": new_balance,
+        "date": now_str,
+        "entry_id": entry_id,
+        "voice_response": f"Recorded payment of ₹{clean_amount:,.0f} from {cust_name} in Katha ledger sheet."
     })
 
 @app.get("/api/ledger/recent")
